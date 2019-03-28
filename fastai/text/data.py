@@ -14,35 +14,35 @@ text_extensions = {'.txt'}
 
 class LanguageModelPreLoader(Callback):
     "Transforms the texts in `dataset` in a stream for language modelling."
-    def __init__(self, dataset:LabelList, lengths:Collection[int]=None, bs:int=64, bptt:int=70, backwards:bool=False, 
+    def __init__(self, dataset:LabelList, lengths:Collection[int]=None, bs:int=64, bptt:int=70, backwards:bool=False,
                  shuffle:bool=False, drop_last:bool=False):
         self.dataset,self.bs,self.bptt,self.backwards = dataset,bs,bptt,backwards
         self.shuffle,self.drop_last = shuffle,drop_last
         self.lengths = np.array(ifnone(lengths, [len(o) for o in dataset.x.items]))
         self.n = self.lengths.sum() // self.bs
-        
+
     def __len__(self):
         if self.item is not None:    return 1
         if (self.n-1)%self.bptt == 0 or self.drop_last: return ((self.n-1) // self.bptt) * self.bs
         return ((self.n-1) // self.bptt + 1) * self.bs
-    
+
     def __getattr__(self,k:str)->Any: return getattr(self.dataset, k)
-    
+
     def on_epoch_begin(self, **kwargs):
         self.idxs = np.random.permutation(len(self.dataset)) if self.shuffle else arange_of(self.dataset)
         self.text_idx = np.concatenate([[0],self.lengths[self.idxs].cumsum()])
-        
+
     #Training dl gets on_epoch_begin called, val_dl, on_epoch_end
     def on_epoch_end(self, **kwargs): self.on_epoch_begin()
-    
+
     def __getitem__(self, k:int):
         if self.item is not None: return self.dataset[0]
         if not hasattr(self, 'idxs'): self.on_epoch_begin()
-        #The dataloader will send (batch_index) * bs + sample_index, converting to where to read in the stream 
+        #The dataloader will send (batch_index) * bs + sample_index, converting to where to read in the stream
         read_idx = (k//self.bs) * self.bptt
-        i = read_idx  + (k % self.bs) * self.n 
+        i = read_idx  + (k % self.bs) * self.n
         seq_len = min(self.bptt, self.n-read_idx-1)
-        #Getting the indexes of the texts that start and finish the portion i---i+seq_len in the stream 
+        #Getting the indexes of the texts that start and finish the portion i---i+seq_len in the stream
         start,end = np.argmax(self.text_idx >= i)-1,np.argmin(self.text_idx <= i+seq_len+1)
         start = max(0,start)
         #Grabbing the texts we need in the dataset
@@ -192,7 +192,7 @@ class TextLMDataBunch(TextDataBunch):
     "Create a `TextDataBunch` suitable for training a language model."
     @classmethod
     def create(cls, train_ds, valid_ds, test_ds=None, path:PathOrStr='.', no_check:bool=False, bs=64, num_workers:int=0,
-               device:torch.device=None, collate_fn:Callable=data_collate, tfms:Optional[Collection[Callable]]=None, 
+               device:torch.device=None, collate_fn:Callable=data_collate, tfms:Optional[Collection[Callable]]=None,
                **kwargs) -> DataBunch:
         "Create a `TextDataBunch` in `path` from the `datasets` for language modelling."
         datasets = cls._init_ds(train_ds, valid_ds, test_ds)
@@ -200,7 +200,7 @@ class TextLMDataBunch(TextDataBunch):
         val_bs = bs
         dls = [DataLoader(d, b, shuffle=False) for d,b in zip(datasets, (bs,val_bs,val_bs,val_bs)) if d is not None]
         return cls(*dls, path=path, device=device, tfms=tfms, collate_fn=collate_fn, no_check=no_check)
-    
+
 class TextClasDataBunch(TextDataBunch):
     "Create a `TextDataBunch` suitable for training an RNN classifier."
     @classmethod
@@ -229,12 +229,12 @@ class Text(ItemBase):
 
 class TokenizeProcessor(PreProcessor):
     "`PreProcessor` that tokenizes the texts in `ds`."
-    def __init__(self, ds:ItemList=None, tokenizer:Tokenizer=None, chunksize:int=10000, mark_fields:bool=False):
-        self.tokenizer,self.chunksize,self.mark_fields = ifnone(tokenizer, Tokenizer()),chunksize,mark_fields
+    def __init__(self, ds:ItemList=None, tokenizer:Tokenizer=None, chunksize:int=10000, mark_fields:bool=False, sos_token:Optional[str]=BOS):
+        self.tokenizer,self.chunksize,self.mark_fields,self.sos_token = ifnone(tokenizer, Tokenizer()),chunksize,mark_fields,sos_token
 
     def process_one(self, item):  return self.tokenizer._process_all_1([item])[0]
     def process(self, ds):
-        ds.items = _join_texts(ds.items, self.mark_fields)
+        ds.items = _join_texts(ds.items, self.mark_fields, sos_token=self.sos_token)
         tokens = []
         for i in progress_bar(range(0,len(ds),self.chunksize), leave=False):
             tokens += self.tokenizer.process_all(ds.items[i:i+self.chunksize])
@@ -316,13 +316,13 @@ class LMTextList(TextList):
     _is_lm = True
     _label_cls = EmptyLabel
 
-def _join_texts(texts:Collection[str], mark_fields:bool=False):
+def _join_texts(texts:Collection[str], mark_fields:bool=False, sos_token:Optional[str]=BOS):
     if not isinstance(texts, np.ndarray): texts = np.array(texts)
     if is1d(texts): texts = texts[:,None]
     df = pd.DataFrame({i:texts[:,i] for i in range(texts.shape[1])})
-    #text_col = f'{BOS} {FLD} {1} ' + df[0] if mark_fields else  f'{BOS} ' + df[0]
-    text_col = f'{BOS} {FLD} {1} ' + df[0].astype(str) if mark_fields else  f'{BOS} ' + df[0].astype(str)
+    text_col = f'{FLD} {1} ' + df[0].astype(str) if mark_fields else df[0].astype(str)
+    if sos_token is not None: text_col = f"{sos_token} " + text_col
     for i in range(1,len(df.columns)):
         #text_col += (f' {FLD} {i+1} ' if mark_fields else ' ') + df[i]
-        text_col += (f' {FLD} {i+1} ' if mark_fields else ' ') + df[i].astype(str)   
+        text_col += (f' {FLD} {i+1} ' if mark_fields else ' ') + df[i].astype(str)
     return text_col.values
