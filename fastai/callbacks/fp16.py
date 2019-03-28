@@ -4,9 +4,7 @@ from ..callback import *
 from ..basic_train import *
 from torch._utils import _unflatten_dense_tensors
 from torch.nn.utils import parameters_to_vector
-
 __all__ = ['MixedPrecision']
-
 def get_master(layer_groups:ModuleList, flat_master:bool=False) -> Tuple[List[List[Tensor]], List[List[Tensor]]]:
     "Return two lists, one for the model parameters in FP16 and one for the master parameters in FP32."
     split_groups = split_bn_bias(layer_groups)
@@ -89,7 +87,9 @@ class MixedPrecision(LearnerCallback):
         "Convert the gradients back to FP32 and divide them by the scale."
         model_g2master_g(self.model_params, self.master_params, self.flat_master)
         for group in self.master_params:
-            for param in group: param.grad.div_(self.loss_scale)
+            for param in group:
+                if param.grad is not None:
+                    param.grad.div_(self.loss_scale)
 
     def on_step_end(self, **kwargs:Any)->None:
         "Update the params from master to model and zero grad."
