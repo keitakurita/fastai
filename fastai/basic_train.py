@@ -41,6 +41,10 @@ def get_preds(model:nn.Module, dl:DataLoader, pbar:Optional[PBar]=None, cb_handl
     if activ is not None: res[0] = activ(res[0])
     return res
 
+def _get_bs(xb):
+    if isinstance(xb, (list, tuple)): return xb[0].shape[0]
+    else: return xb.shape[0]
+
 def validate(model:nn.Module, dl:DataLoader, loss_func:OptLossFunc=None, cb_handler:Optional[CallbackHandler]=None,
              pbar:Optional[PBar]=None, average=True, n_batch:Optional[int]=None)->Iterator[Tuple[Union[Tensor,int],...]]:
     "Calculate `loss_func` of `model` on `dl` in evaluation mode."
@@ -52,7 +56,7 @@ def validate(model:nn.Module, dl:DataLoader, loss_func:OptLossFunc=None, cb_hand
             if cb_handler: xb, yb = cb_handler.on_batch_begin(xb, yb, train=False)
             val_losses.append(loss_batch(model, xb, yb, loss_func, cb_handler=cb_handler))
             if not is_listy(yb): yb = [yb]
-            nums.append(yb[0].shape[0])
+            nums.append(_get_bs(xb)) # Temporary hack to get validation working
             if cb_handler and cb_handler.on_batch_end(val_losses[-1]): break
             if n_batch and (len(nums)>=n_batch): break
         nums = np.array(nums, dtype=np.float32)
